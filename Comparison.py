@@ -119,7 +119,7 @@ class main:
 
     def generate_html_log(self, compare_results, there_are_differences):
         same_files, different_files = self.same_diff()
-        with open(self.path_output+"/"+self.output_file, 'w') as f:
+        with open(self.path_output+"/"+self.output_file, 'w', encoding='utf-8') as f:
             f.write('<html><head><style> .diff_add { background-color: #d4fcdc; } .diff_sub { background-color: #f8d7da; } </style></head><body>')
             f.write('<h1>Comparison test results</h1>')
             f.write('<p>Comparison software version: '+self.ver+'</p>')
