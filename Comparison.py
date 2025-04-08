@@ -1,14 +1,11 @@
 # Download SmartConsole.py from: https://github.com/VladFeldfix/Smart-Console/blob/main/SmartConsole.py
 from SmartConsole import *
-import os
-import difflib
-from datetime import datetime
 
 class main:
     # constructor
     def __init__(self):
         # load smart console
-        self.ver = "1.0"
+        self.ver = "2.0"
         self.sc = SmartConsole("Comparison",self.ver)
 
         # set-up main memu
@@ -18,177 +15,244 @@ class main:
         self.path_folder1 = self.sc.get_setting("Folder 1")
         self.path_folder2 = self.sc.get_setting("Folder 2")
         self.path_output = self.sc.get_setting("Output")
+        self.formats = self.sc.get_setting("Formats").split(",")
 
         # display main menu
         self.sc.start()
 
+    
     def run(self):
-        # test paths
+        # test output path
         self.sc.test_path(self.path_output)
 
         # get folder 1
         self.path_folder1 = self.sc.input("Insert folder 1 [Default: "+self.path_folder1+"]") or self.path_folder1
+        self.sc.test_path(self.path_folder1)
+
         # get folder 2
         self.path_folder2 = self.sc.input("Insert folder 2 [Default: "+self.path_folder2+"]") or self.path_folder2
-
-        self.sc.test_path(self.path_folder1)
         self.sc.test_path(self.path_folder2)
+        self.save()
 
-        self.save(self.path_folder1)
-        self.save(self.path_folder2)
+        # start
+        self.strat_timestamp = self.sc.today()+" "+self.sc.now()
+        self.sc.print("START: "+self.strat_timestamp)
+        self.compare()
+        self.generate_html()
 
+        # end
+        end_timestamp = self.sc.today()+" "+self.sc.now()
+        self.sc.print("END: "+end_timestamp)
 
-        # run comparison between files
-        start_time = datetime.now()
-        start = start_time.strftime('%Y-%m-%d %H:%M:%S')
-        self.started = start
-        self.sc.print(f"Start: {start}")
-        self.compare_folders(self.path_folder1, self.path_folder2)
-        file_path = os.path.join(self.path_output, self.output_file)
-        os.startfile(file_path)
-        # End of the script
-        end_time = datetime.now()
-        self.sc.print(f"End: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        
         # restart
         self.sc.restart()
-
-    def compare_folders(self, folder1, folder2):
-        # Create sets to store file paths
-        files1 = {}
-        files2 = {}
-        self.output_file = self.sc.today()+self.sc.right_now()+".html"
-        self.output_file = self.output_file.replace(":","").replace("-","").replace(" ","")
-
-        # Walk through folder1 and include subdirectories
-        for root, _, files in os.walk(folder1):
+    
+    def compare(self):
+        # get all files from folder 1
+        self.folder1 = {} # filename: location
+        self.folder1_keys = [] # filename, filename, filename, ...
+        for root, folders, files in os.walk(self.path_folder1):
             for file in files:
-                # Create a relative path for comparison
-                relative_path = os.path.relpath(os.path.join(root, file), folder1)
-                files1[relative_path] = os.path.join(root, file)
+                file_format = file.split(".")
+                if len(file_format) > 1:
+                    file_format = file_format[1]
+                else:
+                    file_format = ".file"
+                if file_format in self.formats:
+                    if not file in self.folder1:
+                        self.folder1[file] = root
+                        self.folder1_keys.append(file)
+                    else:
+                        choice = self.sc.choose("Which file would you like to add to the comparison list?",(root+"/"+file, self.folder1[file]+"/"+file))
+                        if choice == root+"/"+file:
+                            self.folder1[file] = root
 
-        # Walk through folder2 and include subdirectories
-        for root, _, files in os.walk(folder2):
+        # get all files from folder 2
+        self.folder2 = {} # filename: location
+        self.folder2_keys = [] # filename, filename, filename, ...
+        for root, folders, files in os.walk(self.path_folder2):
             for file in files:
-                # Create a relative path for comparison
-                relative_path = os.path.relpath(os.path.join(root, file), folder2)
-                files2[relative_path] = os.path.join(root, file)
-
-        # Get common files based on relative paths
-        common_files = set(files1.keys()).intersection(set(files2.keys()))
+                file_format = file.split(".")
+                if len(file_format) > 1:
+                    file_format = file_format[1]
+                else:
+                    file_format = ".file"
+                if file_format in self.formats:
+                    if not file in self.folder2:
+                        self.folder2[file] = root
+                        self.folder2_keys.append(file)
+                    else:
+                        if file in self.folder1:
+                            choice = self.sc.choose("Which file would you like to add to the comparison list?",(root+"/"+file, self.folder2[file]+"/"+file))
+                            if choice == root+"/"+file:
+                                self.folder2[file] = root
         
-        compare_results = []
+        # get a list of unique files
+        self.unique_files = self.diff(self.folder1_keys,self.folder2_keys)
 
-        for relative_filename in common_files:
-            file1_path = files1[relative_filename]
-            file2_path = files2[relative_filename]
-            
-            if os.path.isfile(file1_path) and os.path.isfile(file2_path):
-                diff = self.compare_files(file1_path, file2_path)
-                if diff is not None:  # Only add if there are differences
-                    compare_results.append((relative_filename, diff))
-            else:
-                self.sc.print(f"Skipping {relative_filename}: one of them is not a file.")
+        # get a list of similar files for comparison
+        self.similars = self.intersection(self.folder1_keys,self.folder2_keys)
 
-        if compare_results:  # Only generate the report if there are differences found
-            self.generate_html_log(compare_results, True)
-        else:
-            self.sc.warning("No differences were found between the compared files.")
-            self.generate_html_log(compare_results, False)
+        # go over each file in similar files and compare the two
+        self.comparison_log = {} # file: [ [in folder1] , [in folder2] ]
+        self.faild = []
 
-    def compare_files(self, file1, file2):
-        try:
-            with open(file1, 'r') as f1, open(file2, 'r') as f2:
+        for file in self.similars:
+            compare = True
+            # get file 1
+            try:
+                f1 = open(self.folder1[file]+"/"+file, "r", encoding='utf-8')
                 f1_lines = f1.readlines()
+                f1.close()
+            except:
+                self.sc.error("Cannot read file: "+self.folder1[file]+"/"+file)
+                compare = False
+                self.faild.append(self.folder1[file]+"/"+file)
+            
+            # get file 2
+            try:
+                f2 = open(self.folder2[file]+"/"+file, "r", encoding='utf-8')
                 f2_lines = f2.readlines()
-        except PermissionError as e:
-            self.sc.error(f"PermissionError: {e}. Unable to open {file1} or {file2}.")
-            return None  # Return None if failed to read files
-        except Exception as e:
-            self.sc.error(f"Failed to read files {file1} and {file2}: {e}")
-            return None  # Return None if exception occurs
-        
-        d = difflib.Differ()
-        diff = list(d.compare(f1_lines, f2_lines))
-        
-        # Check if there are any differences
-        if any(line.startswith('- ') or line.startswith('+ ') for line in diff):
-            return diff
+                f2.close()
+            except:
+                self.sc.error("Cannot read file: "+self.folder2[file]+"/"+file)
+                compare = False
+                self.faild.append(self.folder2[file]+"/"+file)
+            
+            # compare files
+            if compare:
+                compare_results = self.compare_files(f1_lines, f2_lines)
+                if len(compare_results[0]) > 0:
+                    self.comparison_log[file] = compare_results
+    
+    def diff(self, list1, list2):
+        return list(set(list1).symmetric_difference(set(list2)))
+
+    def intersection(self, list1, list2):
+        return list(set(list1).intersection(set(list2)))
+
+    def compare_files(self, list1, list2):
+        diff = self.diff(list1, list2)
+        result = [[],[]]
+        if len(diff) > 0:
+            i = 0
+            while i < max(len(list1), len(list2)):
+                Aerror = False
+                Berror = False
+                if i > len(list1)-1:
+                    a = " "
+                else:
+                    a = list1[i]
+                if i > len(list2)-1:
+                    b = " "
+                else:
+                    b = list2[i]
+                if a != b:
+                    if len(list1) < len(list2):
+                        list1.insert(i, " ")
+                        a = list1[i]
+                        Berror = True
+                    else:
+                        list2.insert(i, " ")
+                        b = list2[i]
+                        Aerror = True
+                add = False
+                if len(a) > 0 and a != " " and a != "" and a !="\n":
+                    add = True
+                if len(b) > 0 and b != " " and b != "" and b !="\n":
+                    add = True
+                if add:
+                    result[0].append((a,Aerror))
+                    result[1].append((b,Berror))
+                i += 1
+        return result
+
+    def generate_html(self):
+        html_filename = self.strat_timestamp.replace(" ","").replace(":","").replace("-","")
+        html = self.path_output+"/"+html_filename+".html"
+        f = open(html, 'w', encoding='utf-8')
+        f.write('<html>\n')
+        f.write('    <head>\n')
+        f.write('        <style>\n')
+        f.write('            table, tr, td, th{\n')
+        f.write('                border: 1px solid black;\n')
+        f.write('                border-collapse: collapse;\n')
+        f.write('            }\n')
+        f.write('            .red{\n')
+        f.write('                background-color: red;\n')
+        f.write('                color: white;\n')
+        f.write('            }\n')
+        f.write('        </style>\n')
+        f.write('    </head>\n')
+        f.write('    <body>\n')
+        f.write('        <h1>Comparison test results</h1>\n')
+        f.write('        <p>Comparison software version: '+self.ver+'</p>\n')
+        f.write('        <p>Date: '+self.strat_timestamp+'</p>\n')
+        f.write('        <p>Folder 1: '+self.path_folder1+' ('+str(len(self.folder1_keys))+' files tested)</p>\n')
+        f.write('        <p>Folder 2: '+self.path_folder2+' ('+str(len(self.folder2_keys))+' files tested)</p>\n')
+        f.write('        <p>Tested formats: '+','.join(self.formats)+'\n')
+        if len(self.comparison_log) == 0:
+            f.write('        <p><b> - NO DIFFERENCES HAVE BEEN FOUND! - </b></p>\n')
         else:
-            return None  # No differences found
-
-    def generate_html_log(self, compare_results, there_are_differences):
-        same_files, different_files = self.same_diff()
-        with open(self.path_output+"/"+self.output_file, 'w', encoding='utf-8') as f:
-            f.write('<html><head><style> .diff_add { background-color: #d4fcdc; } .diff_sub { background-color: #f8d7da; } </style></head><body>')
-            f.write('<h1>Comparison test results</h1>')
-            f.write('<p>Comparison software version: '+self.ver+'</p>')
-            f.write('<p>Date: '+self.started+'</p>')
-            f.write('<p>Folder 1: '+self.path_folder1+'</p>')
-            f.write('<p>Folder 2: '+self.path_folder2+'</p>')
-            if there_are_differences:
-                for filename, diff in compare_results:
-                    f.write(f'<h2>Comparing: {filename}</h2><table border="1"><tr><th>File 1</th><th>File 2</th></tr>')
-                    for result in diff:
-                        # Ignore empty lines
-                        if result.strip():  # Only process non-empty lines
-                            f.write('<tr>')
-                            if result.startswith('- '):
-                                f.write(f'<td class="diff_sub">{result[2:].strip()}</td><td></td>')
-                            elif result.startswith('+ '):
-                                f.write(f'<td></td><td class="diff_add">{result[2:].strip()}</td>')
-                            else:
-                                line = result[2:].strip()
-                                f.write(f'<td>{line}</td><td>{line}</td>')
-                            f.write('</tr>')
-                f.write('</table><br/>')
+            f.write('        <h2>Found differences in ('+str(len(self.comparison_log))+') files:</h2>\n')
+            for file, log in self.comparison_log.items():
+                f.write('        <p><b>'+file+':</b></p>\n')
+                f.write('        <table>\n')
+                f.write('            <tr>\n')
+                f.write('                <th>'+self.folder1[file]+'/'+file+'</th>\n')
+                f.write('                <th>'+self.folder2[file]+'/'+file+'</th>\n')
+                f.write('            </tr>\n')
+                i = 0
+                while i < len(log[0]):
+                    f.write('            <tr>\n')
+                    Aerror = ""
+                    if log[0][i][1]:
+                        Aerror = ' class = "red"'
+                    Berror = ""
+                    if log[1][i][1]:
+                        Berror = ' class = "red"'
+                    f.write('                <td'+Aerror+'>'+log[0][i][0].replace("<","&lt;").replace(">","&gt;").replace(" ","&nbsp;")+'</td>\n')
+                    f.write('                <td'+Berror+'>'+log[1][i][0].replace("<","&lt;").replace(">","&gt;").replace(" ","&nbsp;")+'</td>\n')
+                    f.write('            </tr>\n')
+                    i += 1
+                f.write('        </table>\n')
+        
+        # Both folders have
+        f.write('        <p>Both folders have ('+str(len(self.similars))+' files):</p>\n')
+        f.write('        <ol>\n')
+        for file in self.similars:
+            f.write('            <li>'+file+'</li>\n')
+        f.write('        </ol>\n')
+        
+        # Only one folder have 
+        f.write('        <p>Only one folder have ('+str(len(self.unique_files))+' files):</p>\n')
+        f.write('        <ol>\n')
+        for file in self.unique_files:
+            path = ""
+            if file in self.folder1:
+                path = self.folder1[file]+"/"+file
             else:
-                f.write('<p><b> - No differences have been detected! - </b></p>')
-            
-            f.write('<p><u>Both folders have:</u></p>')
-            f.write('<ol>')
-            for file in same_files:
-                f.write('<li>'+file+'</il>')
-            f.write('</ol>')
-            
-            f.write('<p><u>Only one folder have:</u></p>')
-            f.write('<ol>')
-            for file in different_files:
-                f.write('<li>'+file+'</il>')
-            f.write('</ol>')
-            f.write('</body></html>')
-    
-    def get_all_files(self, folder):
-        """Return a set of files (with their names) in the given folder and its subfolders."""
-        files = set()
-        for dirpath, _, filenames in os.walk(folder):
-            for file in filenames:
-                files.add(file)
-        return files
-    
-    def same_diff(self):
-        # Get all file names in both folders (including subfolders)
-        files1 = self.get_all_files(self.path_folder1)
-        files2 = self.get_all_files(self.path_folder2)
+                path = self.folder2[file]+"/"+file
+            f.write('            <li>'+path+'</li>\n')
+        f.write('        </ol>\n')
         
-        # List of same name files (only names)
-        same_name_files = list(files1.intersection(files2))
-        
-        # List of different name files with full paths
-        different_name_files = []
+        # Failed to read
+        f.write('        <p>Failed to read ('+str(len(self.faild))+' files):</p>\n')
+        f.write('        <ol>\n')
+        for file in self.faild:
+            f.write('            <li>'+file+'</li>\n')
+        f.write('        </ol>\n')
 
-        for file in files1.difference(files2):
-            different_name_files.append(os.path.join(self.path_folder1, file))
-            
-        for file in files2.difference(files1):
-            different_name_files.append(os.path.join(self.path_folder2, file))
-        
-        return same_name_files, different_name_files
+        f.write('    </body>\n')
+        f.write('</html>\n')
+        os.startfile(html)
 
-    def save(self, path):
+    def save(self):
         file = open("settings.txt", 'w', encoding='utf-8')
         file.write("Folder 1 > "+self.path_folder1+"\n")
         file.write("Folder 2 > "+self.path_folder2+"\n")
         file.write("Output > "+self.path_output+"\n")
+        file.write("Formats > "+','.join(self.formats)+"\n")
         file.close()
+
 main()
